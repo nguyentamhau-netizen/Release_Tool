@@ -48,6 +48,7 @@ class TaigaClient:
         self.config = config
         self.api_base = f"{self.config.base_url}/api/v1"
         self.auth_token: Optional[str] = None
+        self.user_cache: Dict[int, Dict[str, Any]] = {}
 
     def login(self) -> None:
         payload = {
@@ -87,8 +88,13 @@ class TaigaClient:
                         authorized=True,
                     )
                     status = self._extract_status(payload)
-                    pic = self._extract_issue_pic(payload)
-                    return {"Status": status, "QC PIC": self._filter_qc_names(pic)}
+                    raw_pic = self._extract_issue_pic(payload)
+                    return {
+                        "Status": status,
+                        "QC PIC": self._filter_qc_names(raw_pic),
+                        "_raw_qc_pic": raw_pic,
+                        "_source": "issue",
+                    }
 
                 payload = self._request_json(
                     method="GET",
@@ -97,8 +103,13 @@ class TaigaClient:
                     authorized=True,
                 )
                 status = self._extract_status(payload)
-                pic = self._extract_assigned_to(payload)
-                return {"Status": status, "QC PIC": self._filter_qc_names(pic)}
+                raw_pic = self._extract_userstory_pic(payload)
+                return {
+                    "Status": status,
+                    "QC PIC": self._filter_qc_names(raw_pic),
+                    "_raw_qc_pic": raw_pic,
+                    "_source": "userstory",
+                }
             except RuntimeError as exc:
                 last_error = exc
                 if " 404 " not in f" {exc} " and "No UserStory matches" not in str(exc) and "No Issue matches" not in str(exc):
@@ -131,6 +142,39 @@ class TaigaClient:
             return self._user_display_name(assigned_to_extra)
         return ""
 
+    def _extract_userstory_pic(self, payload: Dict[str, Any]) -> str:
+        names: List[str] = []
+        assigned = self._extract_assigned_to(payload)
+        if assigned:
+            names.append(assigned)
+
+        assigned_users = payload.get("assigned_users")
+        if isinstance(assigned_users, list):
+            for user_id in assigned_users:
+                if isinstance(user_id, int):
+                    name = self._get_user_name(user_id)
+                    if name:
+                        names.append(name)
+
+        story_id = payload.get("id")
+        if isinstance(story_id, int):
+            try:
+                watchers = self._request_json(
+                    method="GET",
+                    path=f"/userstories/{story_id}/watchers",
+                    authorized=True,
+                )
+            except Exception:
+                watchers = []
+            if isinstance(watchers, list):
+                for watcher in watchers:
+                    if isinstance(watcher, dict):
+                        name = self._user_display_name(watcher)
+                        if name:
+                            names.append(name)
+
+        return ", ".join(dict.fromkeys(names))
+
     def _extract_issue_pic(self, payload: Dict[str, Any]) -> str:
         issue_id = payload.get("id")
         watcher_names: List[str] = []
@@ -152,7 +196,20 @@ class TaigaClient:
 
         if watcher_names:
             return ", ".join(dict.fromkeys(watcher_names))
-        return self._extract_assigned_to(payload)
+        names: List[str] = []
+        assigned = self._extract_assigned_to(payload)
+        if assigned:
+            names.append(assigned)
+
+        assigned_users = payload.get("assigned_users")
+        if isinstance(assigned_users, list):
+            for user_id in assigned_users:
+                if isinstance(user_id, int):
+                    name = self._get_user_name(user_id)
+                    if name:
+                        names.append(name)
+
+        return ", ".join(dict.fromkeys(names))
 
     def _filter_qc_names(self, raw_names: str) -> str:
         if not raw_names:
@@ -174,6 +231,25 @@ class TaigaClient:
                 return str(value).strip()
         return ""
 
+    def _get_user_name(self, user_id: int) -> str:
+        cached = self.user_cache.get(user_id)
+        if cached:
+            return self._user_display_name(cached)
+
+        try:
+            payload = self._request_json(
+                method="GET",
+                path=f"/users/{user_id}",
+                authorized=True,
+            )
+        except Exception:
+            return ""
+
+        if isinstance(payload, dict):
+            self.user_cache[user_id] = payload
+            return self._user_display_name(payload)
+        return ""
+
     def _match_qc_name(self, raw_name: str) -> str:
         candidate = self._normalize_name(raw_name)
         if not candidate:
@@ -182,33 +258,56 @@ class TaigaClient:
         best_name = ""
         best_score = 0.0
         candidate_tokens = set(candidate.split())
+        significant_candidate_tokens = {token for token in candidate_tokens if len(token) >= 4}
+        candidate_parts = candidate.split()
+        candidate_last_token = candidate_parts[-1] if candidate_parts else ""
 
         for qc_name in self.config.qc_names:
             normalized_qc = self._normalize_name(qc_name)
             if not normalized_qc:
                 continue
 
+            qc_tokens = set(normalized_qc.split())
+            significant_qc_tokens = {token for token in qc_tokens if len(token) >= 4}
+            qc_parts = normalized_qc.split()
+            qc_last_token = qc_parts[-1] if qc_parts else ""
+
             if candidate == normalized_qc:
                 return qc_name
 
-            qc_tokens = set(normalized_qc.split())
-            if candidate_tokens and qc_tokens:
-                if candidate_tokens.issubset(qc_tokens) or qc_tokens.issubset(candidate_tokens):
+            if candidate_last_token and qc_last_token and candidate_last_token == qc_last_token:
+                if len(candidate_last_token) >= 3:
+                    return qc_name
+
+            if significant_candidate_tokens and significant_qc_tokens:
+                if (
+                    significant_candidate_tokens.issubset(significant_qc_tokens)
+                    or significant_qc_tokens.issubset(significant_candidate_tokens)
+                ):
+                    return qc_name
+            elif candidate_tokens and qc_tokens:
+                if candidate_tokens == qc_tokens:
                     return qc_name
 
             score = SequenceMatcher(None, candidate, normalized_qc).ratio()
             if candidate in normalized_qc or normalized_qc in candidate:
-                score = max(score, 0.91)
+                if significant_candidate_tokens & significant_qc_tokens:
+                    score = max(score, 0.9)
 
-            overlap = len(candidate_tokens & qc_tokens)
+            overlap_tokens = significant_candidate_tokens & significant_qc_tokens
+            overlap = len(overlap_tokens)
             if overlap:
-                score = max(score, min(0.9, 0.65 + overlap * 0.12))
+                score = max(score, min(0.92, 0.7 + overlap * 0.1))
+
+            longest_overlap = max((len(token) for token in overlap_tokens), default=0)
+            if longest_overlap >= 4:
+                score = max(score, 0.8)
 
             if score > best_score:
                 best_score = score
                 best_name = qc_name
 
-        if best_score >= 0.78:
+        if best_score >= 0.82:
             return best_name
         return ""
 

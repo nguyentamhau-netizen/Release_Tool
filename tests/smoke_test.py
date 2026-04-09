@@ -46,9 +46,10 @@ def run_smoke_test() -> None:
 
         workbook = load_workbook(output_path)
         worksheet = workbook["Summary"]
-        assert worksheet["A8"].value == "1"
-        assert worksheet["F8"].value == "7738"
-        assert worksheet["I8"].value == "[Seller Center][FE] UI enhancement"
+        assert worksheet["A1"].value == "No"
+        assert worksheet["A2"].value == "1"
+        assert worksheet["F2"].value == "7738"
+        assert worksheet["I2"].value == "[Seller Center][FE] UI enhancement"
 
 
 if __name__ == "__main__":

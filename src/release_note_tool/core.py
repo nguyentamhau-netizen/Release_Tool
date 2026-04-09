@@ -196,9 +196,14 @@ def create_test_result_workbook(
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Summary"
-    build_summary_layout(worksheet, release_type, request_date)
-    write_data_rows(worksheet, rows)
-    write_status_summary_formulas(worksheet, len(rows))
+    layout = build_summary_layout(worksheet, release_type, request_date)
+    write_data_rows(worksheet, rows, data_start_row=layout["data_start_row"])
+    if layout["has_summary"]:
+        write_status_summary_formulas(
+            worksheet,
+            row_count=len(rows),
+            data_start_row=layout["data_start_row"],
+        )
     return workbook
 
 
@@ -206,7 +211,7 @@ def build_summary_layout(
     worksheet: Worksheet,
     release_type: str,
     request_date: str,
-) -> None:
+) -> Dict[str, int | bool]:
     green_fill = PatternFill("solid", fgColor="93C47D")
     dark_fill = PatternFill("solid", fgColor="D9EAD3")
     white_font = Font(bold=True, color="FFFFFF")
@@ -214,46 +219,52 @@ def build_summary_layout(
     thin_side = Side(style="thin", color="000000")
     border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
-    summary_labels = [
-        ("B2", "Release Type"),
-        ("B3", "Generated Date"),
-        ("B4", "Passed Dev"),
-        ("B5", "Passed UAT"),
-        ("E4", "Passed Pro"),
-        ("E5", "On Prod"),
-    ]
-    values = {
-        "C2": release_type,
-        "C3": request_date,
-    }
+    normalized_release_type = release_type.strip().upper()
+    has_summary = normalized_release_type == "PROD"
+    header_row = 7 if has_summary else 1
 
-    for cell_ref, text in summary_labels:
-        worksheet[cell_ref] = text
-        worksheet[cell_ref].font = header_font
-        worksheet[cell_ref].fill = dark_fill
-        worksheet[cell_ref].border = border
-        worksheet[cell_ref].alignment = Alignment(horizontal="center")
+    if has_summary:
+        summary_labels = [
+            ("B2", "Release Type"),
+            ("B3", "Generated Date"),
+            ("B4", "Passed Dev"),
+            ("B5", "Passed UAT"),
+            ("E4", "Passed Pro"),
+            ("E5", "On Prod"),
+        ]
+        values = {
+            "C2": release_type,
+            "C3": request_date,
+        }
 
-    for cell_ref, value in values.items():
-        worksheet[cell_ref] = value
-        worksheet[cell_ref].border = border
-        worksheet[cell_ref].alignment = Alignment(horizontal="center")
+        for cell_ref, text in summary_labels:
+            worksheet[cell_ref] = text
+            worksheet[cell_ref].font = header_font
+            worksheet[cell_ref].fill = dark_fill
+            worksheet[cell_ref].border = border
+            worksheet[cell_ref].alignment = Alignment(horizontal="center")
 
-    for cell_ref in ("C4", "C5", "F4", "F5"):
-        worksheet[cell_ref].fill = PatternFill("solid", fgColor="FFFFFF")
-        worksheet[cell_ref].border = border
-        worksheet[cell_ref].alignment = Alignment(horizontal="center")
+        for cell_ref, value in values.items():
+            worksheet[cell_ref] = value
+            worksheet[cell_ref].border = border
+            worksheet[cell_ref].alignment = Alignment(horizontal="center")
+
+        for cell_ref in ("C4", "C5", "F4", "F5"):
+            worksheet[cell_ref].fill = PatternFill("solid", fgColor="FFFFFF")
+            worksheet[cell_ref].border = border
+            worksheet[cell_ref].alignment = Alignment(horizontal="center")
 
     for index, header in enumerate(OUTPUT_HEADERS, start=1):
-        cell = worksheet.cell(row=7, column=index)
+        cell = worksheet.cell(row=header_row, column=index)
         cell.value = header
         cell.fill = green_fill
         cell.font = white_font
         cell.border = border
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    worksheet.freeze_panes = "A8"
-    worksheet.auto_filter.ref = "A7:I7"
+    data_start_row = header_row + 1
+    worksheet.freeze_panes = f"A{data_start_row}"
+    worksheet.auto_filter.ref = f"A{header_row}:I{header_row}"
 
     widths = {
         "A": 8,
@@ -269,11 +280,20 @@ def build_summary_layout(
     for column, width in widths.items():
         worksheet.column_dimensions[column].width = width
 
+    return {
+        "has_summary": has_summary,
+        "header_row": header_row,
+        "data_start_row": data_start_row,
+    }
 
-def write_data_rows(worksheet: Worksheet, rows: Sequence[ReleaseRow]) -> None:
+
+def write_data_rows(
+    worksheet: Worksheet,
+    rows: Sequence[ReleaseRow],
+    data_start_row: int,
+) -> None:
     thin_side = Side(style="thin", color="000000")
     border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-    data_start_row = 8
 
     for offset, row in enumerate(rows):
         row_index = data_start_row + offset
@@ -298,9 +318,13 @@ def write_data_rows(worksheet: Worksheet, rows: Sequence[ReleaseRow]) -> None:
             worksheet.cell(row=row_index, column=5).style = "Hyperlink"
 
 
-def write_status_summary_formulas(worksheet: Worksheet, row_count: int) -> None:
-    last_row = max(8, 7 + row_count)
-    status_range = f"$G$8:$G${last_row}"
+def write_status_summary_formulas(
+    worksheet: Worksheet,
+    row_count: int,
+    data_start_row: int,
+) -> None:
+    last_row = max(data_start_row, data_start_row + row_count - 1)
+    status_range = f"$G${data_start_row}:$G${last_row}"
     worksheet["C4"] = f'=COUNTIF({status_range},"*PASSED DEV*")'
     worksheet["C5"] = f'=COUNTIF({status_range},"*PASSED UAT*")'
     worksheet["F4"] = f'=COUNTIF({status_range},"*PASSED PRO*")'
@@ -348,8 +372,10 @@ def build_taiga_enrichment(
                     ref_id=ref,
                     status="OK",
                     message=(
+                        f"source='{result.get('_source', '')}', "
                         f"Status='{result.get('Status', '')}', "
-                        f"QC PIC='{result.get('QC PIC', '')}'"
+                        f"raw PIC='{result.get('_raw_qc_pic', '')}', "
+                        f"filtered QC PIC='{result.get('QC PIC', '')}'"
                     ),
                 )
             )
@@ -371,10 +397,10 @@ def apply_taiga_enrichment(
     worksheet: Worksheet,
     rows: Sequence[ReleaseRow],
     taiga_map: Dict[str, Dict[str, str]],
+    data_start_row: int = 8,
 ) -> None:
-    start_row = 8
     for offset, row in enumerate(rows):
-        row_index = start_row + offset
+        row_index = data_start_row + offset
         values = taiga_map.get(row.us_id, {})
         worksheet.cell(row=row_index, column=7).value = values.get("Status", "")
         worksheet.cell(row=row_index, column=8).value = values.get("QC PIC", "")
@@ -390,8 +416,14 @@ def generate_test_result(
 ) -> Path:
     rows = read_release_rows(input_path, sheet_name)
     workbook = create_test_result_workbook(rows, release_type, request_date)
+    data_start_row = 8 if release_type.strip().upper() == "PROD" else 2
     taiga_map, taiga_logs = build_taiga_enrichment(rows, taiga_config_path)
-    apply_taiga_enrichment(workbook["Summary"], rows, taiga_map)
+    apply_taiga_enrichment(
+        workbook["Summary"],
+        rows,
+        taiga_map,
+        data_start_row=data_start_row,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / build_output_filename(release_type, request_date)
     workbook.save(output_path)

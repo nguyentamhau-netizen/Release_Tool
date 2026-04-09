@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import tkinter as tk
 from pathlib import Path
@@ -146,6 +147,7 @@ class ReleaseNoteApp:
 
         self.status_var.set(f"Da tao file: {output_path}{taiga_note}")
         messagebox.showinfo("Success", f"Da tao file thanh cong:\n{output_path}{taiga_note}")
+        self._open_output_file(output_path)
 
     def _resolve_runtime_root(self) -> Path:
         if getattr(sys, "frozen", False):
@@ -154,3 +156,9 @@ class ReleaseNoteApp:
                 return repo_root
             return Path(sys.executable).resolve().parent
         return Path(__file__).resolve().parents[2]
+
+    def _open_output_file(self, output_path: Path) -> None:
+        try:
+            os.startfile(str(output_path))
+        except OSError:
+            pass
