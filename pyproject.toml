@@ -9,7 +9,8 @@ description = "Local desktop tool to generate Test Result files from Release Not
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "openpyxl>=3.1.5"
+    "openpyxl>=3.1.5",
+    "tkcalendar>=1.6.1"
 ]
 
 [project.scripts]
