@@ -39,6 +39,17 @@ class ReleaseNoteApp:
         container = ttk.Frame(self.root, padding=20)
         container.pack(fill="both", expand=True)
         container.columnconfigure(1, weight=1)
+        style = ttk.Style(self.root)
+        style.configure(
+            "DatePicker.TEntry",
+            fieldbackground="white",
+            foreground="black",
+        )
+        style.map(
+            "DatePicker.TEntry",
+            fieldbackground=[("readonly", "white")],
+            foreground=[("readonly", "black")],
+        )
 
         ttk.Label(container, text="Release Type").grid(row=0, column=0, sticky="w", pady=8)
         ttk.Combobox(
@@ -54,6 +65,7 @@ class ReleaseNoteApp:
             textvariable=self.request_date_var,
             state="readonly",
             width=18,
+            style="DatePicker.TEntry",
         )
         self.date_picker.grid(row=1, column=1, sticky="ew", pady=8)
         self.date_picker.bind("<Button-1>", self._show_date_picker, add="+")
