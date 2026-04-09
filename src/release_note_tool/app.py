@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from tkcalendar import DateEntry
+from tkcalendar import Calendar
 
 from .core import find_matching_sheets, generate_test_result, today_text
 
@@ -26,6 +26,8 @@ class ReleaseNoteApp:
         self.sheet_name_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Select a Release Note file to get started.")
         self.available_sheets: list[str] = []
+        self.date_popup: tk.Toplevel | None = None
+        self.calendar_widget: Calendar | None = None
 
         self.project_root = self._resolve_runtime_root()
         self.output_dir = self.project_root / "output" / "generated"
@@ -47,19 +49,14 @@ class ReleaseNoteApp:
         ).grid(row=0, column=1, sticky="ew", pady=8)
 
         ttk.Label(container, text="Request Date").grid(row=1, column=0, sticky="w", pady=8)
-        self.date_picker = DateEntry(
+        self.date_picker = ttk.Entry(
             container,
             textvariable=self.request_date_var,
-            date_pattern="dd-mm-yyyy",
-            firstweekday="monday",
+            state="readonly",
             width=18,
         )
-        self.date_picker.grid(
-            row=1, column=1, sticky="ew", pady=8
-        )
+        self.date_picker.grid(row=1, column=1, sticky="ew", pady=8)
         self.date_picker.bind("<Button-1>", self._show_date_picker, add="+")
-        self.date_picker.bind("<FocusIn>", self._show_date_picker, add="+")
-        self.date_picker.bind("<FocusOut>", self._hide_date_picker_on_focus_out, add="+")
         self.root.bind_all("<ButtonPress-1>", self._hide_date_picker_on_global_click, add="+")
 
         ttk.Label(container, text="Input File").grid(row=2, column=0, sticky="w", pady=8)
@@ -199,12 +196,43 @@ class ReleaseNoteApp:
 
     def _show_date_picker(self, _event: object) -> None:
         try:
-            self.date_picker.drop_down()
+            if self.date_popup is not None and self.date_popup.winfo_exists():
+                return
+
+            popup = tk.Toplevel(self.root)
+            popup.withdraw()
+            popup.overrideredirect(True)
+            popup.transient(self.root)
+
+            current_date = datetime.strptime(self.request_date_var.get(), "%d-%m-%Y")
+            calendar = Calendar(
+                popup,
+                selectmode="day",
+                date_pattern="dd-mm-yyyy",
+                firstweekday="monday",
+                year=current_date.year,
+                month=current_date.month,
+                day=current_date.day,
+            )
+            calendar.pack()
+            calendar.bind("<<CalendarSelected>>", self._on_calendar_selected)
+
+            self.date_popup = popup
+            self.calendar_widget = calendar
+
+            x = self.date_picker.winfo_rootx()
+            y = self.date_picker.winfo_rooty() + self.date_picker.winfo_height()
+            popup.geometry(f"+{x}+{y}")
+            popup.deiconify()
+            popup.lift()
         except Exception:
             pass
 
-    def _hide_date_picker_on_focus_out(self, _event: object) -> None:
-        self.root.after(50, self._hide_date_picker_if_needed)
+    def _on_calendar_selected(self, _event: object) -> None:
+        if self.calendar_widget is None:
+            return
+        self.request_date_var.set(self.calendar_widget.get_date())
+        self._close_date_picker()
 
     def _hide_date_picker_on_global_click(self, event: object) -> None:
         self._hide_date_picker_if_needed(getattr(event, "widget", None))
@@ -214,32 +242,37 @@ class ReleaseNoteApp:
         clicked_widget: object | None = None,
     ) -> None:
         try:
-            top_cal = self.date_picker._top_cal
-            if not self.date_picker._calendar.winfo_ismapped():
+            if self.date_popup is None or not self.date_popup.winfo_exists():
                 return
 
             if clicked_widget is not None:
                 clicked_path = str(clicked_widget)
-                if clicked_widget == self.date_picker or clicked_path.startswith(str(top_cal)):
+                if clicked_widget == self.date_picker or clicked_path.startswith(str(self.date_popup)):
                     return
-                top_cal.withdraw()
-                self.date_picker.state(["!pressed"])
+                self._close_date_picker()
                 return
 
             focused_widget = self.root.focus_get()
             if focused_widget is None:
-                top_cal.withdraw()
-                self.date_picker.state(["!pressed"])
+                self._close_date_picker()
                 return
 
             focused_path = str(focused_widget)
-            if focused_widget == self.date_picker or focused_path.startswith(str(top_cal)):
+            if focused_widget == self.date_picker or focused_path.startswith(str(self.date_popup)):
                 return
 
-            top_cal.withdraw()
-            self.date_picker.state(["!pressed"])
+            self._close_date_picker()
         except Exception:
             pass
+
+    def _close_date_picker(self) -> None:
+        try:
+            if self.date_popup is not None and self.date_popup.winfo_exists():
+                self.date_popup.destroy()
+        except Exception:
+            pass
+        self.date_popup = None
+        self.calendar_widget = None
 
     def _validate_input_file(self, input_path: Path) -> str:
         if not input_path.exists():
