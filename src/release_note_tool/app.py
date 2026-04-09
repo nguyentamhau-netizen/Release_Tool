@@ -59,6 +59,7 @@ class ReleaseNoteApp:
         )
         self.date_picker.bind("<Button-1>", self._show_date_picker, add="+")
         self.date_picker.bind("<FocusIn>", self._show_date_picker, add="+")
+        self.date_picker.bind("<FocusOut>", self._hide_date_picker_on_focus_out, add="+")
 
         ttk.Label(container, text="Input File").grid(row=2, column=0, sticky="w", pady=8)
         input_frame = ttk.Frame(container)
@@ -198,6 +199,30 @@ class ReleaseNoteApp:
     def _show_date_picker(self, _event: object) -> None:
         try:
             self.date_picker.drop_down()
+        except Exception:
+            pass
+
+    def _hide_date_picker_on_focus_out(self, _event: object) -> None:
+        self.root.after(50, self._hide_date_picker_if_needed)
+
+    def _hide_date_picker_if_needed(self) -> None:
+        try:
+            top_cal = self.date_picker._top_cal
+            if not self.date_picker._calendar.winfo_ismapped():
+                return
+
+            focused_widget = self.root.focus_get()
+            if focused_widget is None:
+                top_cal.withdraw()
+                self.date_picker.state(["!pressed"])
+                return
+
+            focused_path = str(focused_widget)
+            if focused_widget == self.date_picker or focused_path.startswith(str(top_cal)):
+                return
+
+            top_cal.withdraw()
+            self.date_picker.state(["!pressed"])
         except Exception:
             pass
 
