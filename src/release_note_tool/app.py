@@ -207,28 +207,24 @@ class ReleaseNoteApp:
         self.root.after(50, self._hide_date_picker_if_needed)
 
     def _hide_date_picker_on_global_click(self, event: object) -> None:
-        x_root = getattr(event, "x_root", None)
-        y_root = getattr(event, "y_root", None)
-        self.root.after(0, lambda: self._hide_date_picker_if_needed(None, x_root, y_root))
+        self._hide_date_picker_if_needed(getattr(event, "widget", None))
 
     def _hide_date_picker_if_needed(
         self,
         clicked_widget: object | None = None,
-        x_root: int | None = None,
-        y_root: int | None = None,
     ) -> None:
         try:
             top_cal = self.date_picker._top_cal
             if not self.date_picker._calendar.winfo_ismapped():
                 return
 
-            if x_root is not None and y_root is not None:
-                clicked_widget = self.root.winfo_containing(x_root, y_root)
-
             if clicked_widget is not None:
                 clicked_path = str(clicked_widget)
                 if clicked_widget == self.date_picker or clicked_path.startswith(str(top_cal)):
                     return
+                top_cal.withdraw()
+                self.date_picker.state(["!pressed"])
+                return
 
             focused_widget = self.root.focus_get()
             if focused_widget is None:
