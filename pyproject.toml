@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=80.8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "release-note-test-result-tool"
+version = "0.1.0"
+description = "Local desktop tool to generate Test Result files from Release Note xlsx files."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openpyxl>=3.1.5"
+]
+
+[project.scripts]
+release-note-tool = "release_note_tool.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
