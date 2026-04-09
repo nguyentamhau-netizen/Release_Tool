@@ -60,7 +60,7 @@ class ReleaseNoteApp:
         self.date_picker.bind("<Button-1>", self._show_date_picker, add="+")
         self.date_picker.bind("<FocusIn>", self._show_date_picker, add="+")
         self.date_picker.bind("<FocusOut>", self._hide_date_picker_on_focus_out, add="+")
-        self.root.bind_all("<Button-1>", self._hide_date_picker_on_global_click, add="+")
+        self.root.bind_all("<ButtonPress-1>", self._hide_date_picker_on_global_click, add="+")
 
         ttk.Label(container, text="Input File").grid(row=2, column=0, sticky="w", pady=8)
         input_frame = ttk.Frame(container)
@@ -207,14 +207,23 @@ class ReleaseNoteApp:
         self.root.after(50, self._hide_date_picker_if_needed)
 
     def _hide_date_picker_on_global_click(self, event: object) -> None:
-        clicked_widget = getattr(event, "widget", None)
-        self.root.after(0, lambda: self._hide_date_picker_if_needed(clicked_widget))
+        x_root = getattr(event, "x_root", None)
+        y_root = getattr(event, "y_root", None)
+        self.root.after(0, lambda: self._hide_date_picker_if_needed(None, x_root, y_root))
 
-    def _hide_date_picker_if_needed(self, clicked_widget: object | None = None) -> None:
+    def _hide_date_picker_if_needed(
+        self,
+        clicked_widget: object | None = None,
+        x_root: int | None = None,
+        y_root: int | None = None,
+    ) -> None:
         try:
             top_cal = self.date_picker._top_cal
             if not self.date_picker._calendar.winfo_ismapped():
                 return
+
+            if x_root is not None and y_root is not None:
+                clicked_widget = self.root.winfo_containing(x_root, y_root)
 
             if clicked_widget is not None:
                 clicked_path = str(clicked_widget)
