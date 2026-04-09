@@ -60,15 +60,21 @@ class ReleaseNoteApp:
         ).grid(row=0, column=1, sticky="ew", pady=8)
 
         ttk.Label(container, text="Request Date").grid(row=1, column=0, sticky="w", pady=8)
+        date_frame = ttk.Frame(container)
+        date_frame.grid(row=1, column=1, sticky="ew", pady=8)
+        date_frame.columnconfigure(0, weight=1)
         self.date_picker = ttk.Entry(
-            container,
+            date_frame,
             textvariable=self.request_date_var,
             state="readonly",
             width=18,
             style="DatePicker.TEntry",
         )
-        self.date_picker.grid(row=1, column=1, sticky="ew", pady=8)
+        self.date_picker.grid(row=0, column=0, sticky="ew")
         self.date_picker.bind("<Button-1>", self._show_date_picker, add="+")
+        ttk.Button(date_frame, text="Pick Date", command=lambda: self._show_date_picker(None)).grid(
+            row=0, column=1, padx=(8, 0)
+        )
         self.root.bind_all("<ButtonPress-1>", self._hide_date_picker_on_global_click, add="+")
 
         ttk.Label(container, text="Input File").grid(row=2, column=0, sticky="w", pady=8)
