@@ -57,6 +57,8 @@ class ReleaseNoteApp:
         self.date_picker.grid(
             row=1, column=1, sticky="ew", pady=8
         )
+        self.date_picker.bind("<Button-1>", self._show_date_picker, add="+")
+        self.date_picker.bind("<FocusIn>", self._show_date_picker, add="+")
 
         ttk.Label(container, text="Input File").grid(row=2, column=0, sticky="w", pady=8)
         input_frame = ttk.Frame(container)
@@ -191,6 +193,12 @@ class ReleaseNoteApp:
         try:
             os.startfile(str(output_dir))
         except OSError:
+            pass
+
+    def _show_date_picker(self, _event: object) -> None:
+        try:
+            self.date_picker.drop_down()
+        except Exception:
             pass
 
     def _validate_input_file(self, input_path: Path) -> str:
