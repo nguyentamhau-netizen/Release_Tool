@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import json
 import tkinter as tk
 import zipfile
 from datetime import datetime
@@ -10,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from tkcalendar import Calendar
 
+from .taiga import TaigaConfig
 from .core import find_matching_sheets, generate_test_result, today_text
 
 
@@ -32,8 +35,111 @@ class ReleaseNoteApp:
         self.project_root = self._resolve_runtime_root()
         self.output_dir = self.project_root / "output" / "generated"
         self.taiga_config_path = self.project_root / "taiga.local.json"
+        self.prefs_path = self.project_root / "user_prefs.json"
 
+        self._load_prefs()
         self._build_ui()
+
+    def _load_prefs(self) -> None:
+        if self.prefs_path.exists():
+            try:
+                prefs = json.loads(self.prefs_path.read_text("utf-8"))
+                if "release_type" in prefs:
+                    self.release_type_var.set(prefs["release_type"])
+                if "input_file" in prefs:
+                    self.input_file_var.set(prefs["input_file"])
+                    # Auto-load sheets
+                    try:
+                        sheets = find_matching_sheets(Path(prefs["input_file"]))
+                        if sheets:
+                            self.available_sheets = sheets
+                            self.sheet_combo["values"] = sheets
+                            if "sheet_name" in prefs and prefs["sheet_name"] in sheets:
+                                self.sheet_name_var.set(prefs["sheet_name"])
+                            else:
+                                self.sheet_name_var.set(sheets[0])
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    def _save_prefs(self) -> None:
+        prefs = {
+            "release_type": self.release_type_var.get(),
+            "input_file": self.input_file_var.get(),
+            "sheet_name": self.sheet_name_var.get(),
+        }
+        try:
+            self.prefs_path.write_text(json.dumps(prefs), "utf-8")
+        except Exception:
+            pass
+            
+    def _open_settings(self):
+        popup = tk.Toplevel(self.root)
+        popup.title("Taiga Settings")
+        popup.geometry("400x450")
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+
+        try:
+            config = TaigaConfig.from_path(self.taiga_config_path)
+        except Exception:
+            config = TaigaConfig("", "", "", "", tuple())
+
+        frame = ttk.Frame(popup, padding=20)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Base URL:").grid(row=0, column=0, sticky="w", pady=4)
+        base_url_var = tk.StringVar(value=config.base_url)
+        ttk.Entry(frame, textvariable=base_url_var, width=40).grid(row=0, column=1, sticky="w", pady=4)
+
+        ttk.Label(frame, text="Project Slug:").grid(row=1, column=0, sticky="w", pady=4)
+        slug_var = tk.StringVar(value=config.project_slug)
+        ttk.Entry(frame, textvariable=slug_var, width=40).grid(row=1, column=1, sticky="w", pady=4)
+
+        ttk.Label(frame, text="Username:").grid(row=2, column=0, sticky="w", pady=4)
+        user_var = tk.StringVar(value=config.username)
+        ttk.Entry(frame, textvariable=user_var, width=40).grid(row=2, column=1, sticky="w", pady=4)
+
+        ttk.Label(frame, text="Password:").grid(row=3, column=0, sticky="w", pady=4)
+        pass_var = tk.StringVar(value=config.password)
+        ttk.Entry(frame, textvariable=pass_var, width=40, show="*").grid(row=3, column=1, sticky="w", pady=4)
+
+        ttk.Label(frame, text="QC Names (1 per line):").grid(row=4, column=0, columnspan=2, sticky="w", pady=(12, 4))
+        qc_text = tk.Text(frame, height=10, width=45)
+        qc_text.grid(row=5, column=0, columnspan=2, sticky="w")
+        qc_text.insert("1.0", "\n".join(config.qc_names))
+
+        def save_settings():
+            names = [n.strip() for n in qc_text.get("1.0", tk.END).split("\n") if n.strip()]
+            new_config = TaigaConfig(
+                base_url=base_url_var.get().strip(),
+                project_slug=slug_var.get().strip(),
+                username=user_var.get().strip(),
+                password=pass_var.get(),
+                qc_names=tuple(names)
+            )
+            try:
+                new_config.save(self.taiga_config_path)
+                messagebox.showinfo("Success", "Settings saved!", parent=popup)
+                popup.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=popup)
+
+        ttk.Button(frame, text="Save Settings", command=save_settings).grid(row=6, column=0, columnspan=2, pady=(16, 0))
+
+    def _show_logs(self, logs):
+        popup = tk.Toplevel(self.root)
+        popup.title("Generate Logs")
+        popup.geometry("800x400")
+        
+        text = tk.Text(popup, wrap="word")
+        text.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        for log in logs:
+            text.insert(tk.END, f"[{log.status}] Row {log.row_no} | {log.item_type} | Ref {log.ref_id} | {log.message}\n")
+        text.config(state="disabled")
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self.root, padding=20)
@@ -94,11 +200,17 @@ class ReleaseNoteApp:
         )
         self.sheet_combo.grid(row=3, column=1, sticky="ew", pady=8)
 
-        ttk.Button(
-            container,
-            text="Generate Test Result",
-            command=self._generate,
-        ).grid(row=4, column=1, sticky="e", pady=(20, 8))
+        btn_frame = ttk.Frame(container)
+        btn_frame.grid(row=4, column=1, sticky="e", pady=(20, 8))
+        
+        ttk.Button(btn_frame, text="⚙️ Settings", command=self._open_settings).pack(side="left", padx=8)
+        self.generate_btn = ttk.Button(btn_frame, text="Generate Test Result", command=self._generate)
+        self.generate_btn.pack(side="left")
+        
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(container, variable=self.progress_var, maximum=100)
+        self.progress_bar.grid(row=6, column=0, columnspan=2, sticky="ew", pady=8)
+        self.progress_bar.grid_remove()  # Hide initially
 
         ttk.Label(
             container,
@@ -106,7 +218,7 @@ class ReleaseNoteApp:
             foreground="#1f4e79",
             wraplength=560,
             justify="left",
-        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(16, 0))
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(16, 0))
 
     def _pick_input_file(self) -> None:
         file_path = filedialog.askopenfilename(
@@ -146,6 +258,7 @@ class ReleaseNoteApp:
         self.available_sheets = sheets
         self.sheet_combo["values"] = sheets
         self.sheet_name_var.set(sheets[0])
+        self._save_prefs()
         self.status_var.set(
             f"Found {len(sheets)} valid sheet(s). Select a sheet and click Generate."
         )
@@ -176,27 +289,65 @@ class ReleaseNoteApp:
             )
             return
 
-        try:
-            output_path = generate_test_result(
-                input_path=Path(input_file),
-                sheet_name=sheet_name,
-                release_type=release_type,
-                request_date=request_date,
-                output_dir=self.output_dir,
-                taiga_config_path=self.taiga_config_path,
-            )
-        except Exception as exc:
-            messagebox.showerror("Generate failed", str(exc))
-            self.status_var.set("Generation failed. Check the error message for details.")
-            return
+        self._save_prefs()
+        self.generate_btn.config(state="disabled")
+        self.progress_bar.grid()
+        self.progress_var.set(0)
+        self.status_var.set("Generating... Please wait.")
+        
+        def run():
+            try:
+                def progress(completed, total):
+                    pct = (completed / total) * 100
+                    self.root.after(0, lambda: self.progress_var.set(pct))
+                    self.root.after(0, lambda: self.status_var.set(f"Generating... {completed}/{total} processed."))
+                    
+                output_path, taiga_logs = generate_test_result(
+                    input_path=Path(input_file),
+                    sheet_name=sheet_name,
+                    release_type=release_type,
+                    request_date=request_date,
+                    output_dir=self.output_dir,
+                    taiga_config_path=self.taiga_config_path,
+                    progress_callback=progress
+                )
+                self.root.after(0, lambda: self._on_generate_success(output_path, taiga_logs))
+            except Exception as exc:
+                self.root.after(0, lambda: self._on_generate_error(str(exc)))
 
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_generate_success(self, output_path, taiga_logs):
+        self.generate_btn.config(state="normal")
+        self.progress_bar.grid_remove()
+        
         taiga_note = ""
         if not self.taiga_config_path.exists():
-            taiga_note = "\nNo taiga.local.json file was found, so Status and QC PIC were left blank."
+            taiga_note = "\\nNo taiga.local.json file was found, so Status and QC PIC were left blank."
 
         self.status_var.set(f"Output created: {output_path}{taiga_note}")
-        messagebox.showinfo("Success", f"Output created successfully:\n{output_path}{taiga_note}")
-        self._open_output_folder(output_path.parent)
+        
+        # Build success window with log button
+        success_popup = tk.Toplevel(self.root)
+        success_popup.title("Success")
+        success_popup.geometry("500x200")
+        success_popup.transient(self.root)
+        
+        ttk.Label(success_popup, text="Output created successfully:", font=("", 10, "bold")).pack(pady=(20, 5))
+        ttk.Label(success_popup, text=str(output_path), wraplength=450).pack(pady=5)
+        
+        btn_frame = ttk.Frame(success_popup)
+        btn_frame.pack(pady=20)
+        
+        ttk.Button(btn_frame, text="Open Folder", command=lambda: [self._open_output_folder(output_path.parent), success_popup.destroy()]).pack(side="left", padx=10)
+        ttk.Button(btn_frame, text="View Logs", command=lambda: self._show_logs(taiga_logs)).pack(side="left", padx=10)
+        ttk.Button(btn_frame, text="Close", command=success_popup.destroy).pack(side="left", padx=10)
+
+    def _on_generate_error(self, error_msg):
+        self.generate_btn.config(state="normal")
+        self.progress_bar.grid_remove()
+        messagebox.showerror("Generate failed", error_msg)
+        self.status_var.set("Generation failed. Check the error message for details.")
 
     def _resolve_runtime_root(self) -> Path:
         if getattr(sys, "frozen", False):

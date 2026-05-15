@@ -5,6 +5,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import threading
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -19,6 +20,17 @@ class TaigaConfig:
     username: str
     password: str
     qc_names: tuple[str, ...]
+
+    def save(self, path: Path) -> None:
+        import json
+        data = {
+            "baseUrl": self.base_url,
+            "projectSlug": self.project_slug,
+            "username": self.username,
+            "password": self.password,
+            "qcNames": list(self.qc_names)
+        }
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     @classmethod
     def from_path(cls, path: Path) -> "TaigaConfig":
@@ -49,6 +61,7 @@ class TaigaClient:
         self.api_base = f"{self.config.base_url}/api/v1"
         self.auth_token: Optional[str] = None
         self.user_cache: Dict[int, Dict[str, Any]] = {}
+        self.cache_lock = threading.Lock()
 
     def login(self) -> None:
         payload = {
@@ -66,6 +79,23 @@ class TaigaClient:
         if not token:
             raise RuntimeError("Taiga login succeeded but no auth token was returned.")
         self.auth_token = token
+
+    def get_all_statuses(self) -> List[str]:
+        if not self.auth_token:
+            self.login()
+        payload = self._request_json(
+            method="GET",
+            path="/projects/by_slug",
+            query={"slug": self.config.project_slug},
+            authorized=True,
+        )
+        statuses = set()
+        for key in ("userstory_statuses", "issue_statuses"):
+            for status_obj in payload.get(key, []):
+                name = status_obj.get("name")
+                if name:
+                    statuses.add(str(name).strip())
+        return sorted(list(statuses))
 
     def enrich(self, item_type: str, ref: str) -> Dict[str, str]:
         normalized_type = item_type.strip().casefold()
@@ -92,6 +122,7 @@ class TaigaClient:
                     return {
                         "Status": status,
                         "QC PIC": self._filter_qc_names(raw_pic),
+                        "Link": f"{self.config.base_url}/project/{self.config.project_slug}/issue/{ref}",
                         "_raw_qc_pic": raw_pic,
                         "_source": "issue",
                     }
@@ -107,6 +138,7 @@ class TaigaClient:
                 return {
                     "Status": status,
                     "QC PIC": self._filter_qc_names(raw_pic),
+                    "Link": f"{self.config.base_url}/project/{self.config.project_slug}/us/{ref}",
                     "_raw_qc_pic": raw_pic,
                     "_source": "userstory",
                 }
@@ -232,7 +264,8 @@ class TaigaClient:
         return ""
 
     def _get_user_name(self, user_id: int) -> str:
-        cached = self.user_cache.get(user_id)
+        with self.cache_lock:
+            cached = self.user_cache.get(user_id)
         if cached:
             return self._user_display_name(cached)
 
@@ -246,7 +279,8 @@ class TaigaClient:
             return ""
 
         if isinstance(payload, dict):
-            self.user_cache[user_id] = payload
+            with self.cache_lock:
+                self.user_cache[user_id] = payload
             return self._user_display_name(payload)
         return ""
 
@@ -255,12 +289,12 @@ class TaigaClient:
         if not candidate:
             return ""
 
-        best_name = ""
-        best_score = 0.0
         candidate_tokens = set(candidate.split())
-        significant_candidate_tokens = {token for token in candidate_tokens if len(token) >= 4}
         candidate_parts = candidate.split()
         candidate_last_token = candidate_parts[-1] if candidate_parts else ""
+
+        best_name = ""
+        best_score = 0.0
 
         for qc_name in self.config.qc_names:
             normalized_qc = self._normalize_name(qc_name)
@@ -268,46 +302,28 @@ class TaigaClient:
                 continue
 
             qc_tokens = set(normalized_qc.split())
-            significant_qc_tokens = {token for token in qc_tokens if len(token) >= 4}
             qc_parts = normalized_qc.split()
             qc_last_token = qc_parts[-1] if qc_parts else ""
 
             if candidate == normalized_qc:
                 return qc_name
 
-            if candidate_last_token and qc_last_token and candidate_last_token == qc_last_token:
-                if len(candidate_last_token) >= 3:
-                    return qc_name
+            if candidate_tokens.issubset(qc_tokens) and len(candidate_tokens) >= 2:
+                return qc_name
+                
+            if qc_tokens.issubset(candidate_tokens) and len(qc_tokens) >= 2:
+                return qc_name
 
-            if significant_candidate_tokens and significant_qc_tokens:
-                if (
-                    significant_candidate_tokens.issubset(significant_qc_tokens)
-                    or significant_qc_tokens.issubset(significant_candidate_tokens)
-                ):
-                    return qc_name
-            elif candidate_tokens and qc_tokens:
-                if candidate_tokens == qc_tokens:
-                    return qc_name
-
+            if len(candidate_tokens) == 1 and candidate_last_token == qc_last_token and len(candidate_last_token) >= 3:
+                return qc_name
+                
             score = SequenceMatcher(None, candidate, normalized_qc).ratio()
-            if candidate in normalized_qc or normalized_qc in candidate:
-                if significant_candidate_tokens & significant_qc_tokens:
-                    score = max(score, 0.9)
-
-            overlap_tokens = significant_candidate_tokens & significant_qc_tokens
-            overlap = len(overlap_tokens)
-            if overlap:
-                score = max(score, min(0.92, 0.7 + overlap * 0.1))
-
-            longest_overlap = max((len(token) for token in overlap_tokens), default=0)
-            if longest_overlap >= 4:
-                score = max(score, 0.8)
 
             if score > best_score:
                 best_score = score
                 best_name = qc_name
 
-        if best_score >= 0.82:
+        if best_score >= 0.88:
             return best_name
         return ""
 

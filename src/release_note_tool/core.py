@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import concurrent.futures
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
+from openpyxl.worksheet.datavalidation import DataValidation
 
 from .taiga import TaigaClient, TaigaConfig
 
@@ -334,7 +336,8 @@ def write_status_summary_formulas(
 def build_taiga_enrichment(
     rows: Sequence[ReleaseRow],
     taiga_config_path: Optional[Path],
-) -> tuple[Dict[str, Dict[str, str]], List[TaigaLogEntry]]:
+    progress_callback: Optional[callable] = None,
+) -> tuple[Dict[str, Dict[str, str]], List[TaigaLogEntry], List[str]]:
     if not taiga_config_path or not taiga_config_path.exists():
         return {}, [
             TaigaLogEntry(
@@ -344,53 +347,55 @@ def build_taiga_enrichment(
                 status="INFO",
                 message="taiga.local.json not found. Status and QC PIC were left blank.",
             )
-        ]
+        ], []
 
     client = TaigaClient(TaigaConfig.from_path(taiga_config_path))
     enrichment: Dict[str, Dict[str, str]] = {}
     logs: List[TaigaLogEntry] = []
-    for row in rows:
+    
+    statuses: List[str] = []
+    try:
+        statuses = client.get_all_statuses()
+    except Exception as exc:
+        logs.append(
+            TaigaLogEntry(
+                row_no="-", 
+                item_type="-", 
+                ref_id="-", 
+                status="ERROR", 
+                message=f"Failed to fetch statuses: {exc}"
+            )
+        )
+    def process_row(row):
         ref = row.us_id.strip()
         if not ref:
-            logs.append(
-                TaigaLogEntry(
-                    row_no=row.no,
-                    item_type=row.item_type,
-                    ref_id=ref,
-                    status="SKIP",
-                    message="Missing ref id after normalization.",
-                )
-            )
-            continue
+            return row, None, TaigaLogEntry(row.no, row.item_type, ref, "SKIP", "Missing ref id after normalization.")
         try:
             result = client.enrich(row.item_type, ref)
-            enrichment[ref] = result
-            logs.append(
-                TaigaLogEntry(
-                    row_no=row.no,
-                    item_type=row.item_type,
-                    ref_id=ref,
-                    status="OK",
-                    message=(
-                        f"source='{result.get('_source', '')}', "
-                        f"Status='{result.get('Status', '')}', "
-                        f"raw PIC='{result.get('_raw_qc_pic', '')}', "
-                        f"filtered QC PIC='{result.get('QC PIC', '')}'"
-                    ),
-                )
-            )
+            msg = f"source='{result.get('_source', '')}', Status='{result.get('Status', '')}', raw PIC='{result.get('_raw_qc_pic', '')}', filtered QC PIC='{result.get('QC PIC', '')}'"
+            return row, result, TaigaLogEntry(row.no, row.item_type, ref, "OK", msg)
         except Exception as exc:
-            enrichment[ref] = {"Status": "", "QC PIC": ""}
-            logs.append(
-                TaigaLogEntry(
-                    row_no=row.no,
-                    item_type=row.item_type,
-                    ref_id=ref,
-                    status="ERROR",
-                    message=str(exc),
-                )
-            )
-    return enrichment, logs
+            return row, {"Status": "", "QC PIC": ""}, TaigaLogEntry(row.no, row.item_type, ref, "ERROR", str(exc))
+
+    total = len(rows)
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(process_row, row): row for row in rows}
+        for future in concurrent.futures.as_completed(futures):
+            row, result, log = future.result()
+            if result:
+                enrichment[row.us_id.strip()] = result
+            logs.append(log)
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total)
+                
+    try:
+        logs.sort(key=lambda x: int(x.row_no) if str(x.row_no).isdigit() else 9999)
+    except:
+        pass
+        
+    return enrichment, logs, statuses
 
 
 def apply_taiga_enrichment(
@@ -404,6 +409,11 @@ def apply_taiga_enrichment(
         values = taiga_map.get(row.us_id, {})
         worksheet.cell(row=row_index, column=7).value = values.get("Status", "")
         worksheet.cell(row=row_index, column=8).value = values.get("QC PIC", "")
+        if "Link" in values:
+            link_cell = worksheet.cell(row=row_index, column=5)
+            link_cell.value = "LINK"
+            link_cell.hyperlink = values["Link"]
+            link_cell.font = Font(underline="single", color="0563C1")
 
 
 def generate_test_result(
@@ -413,22 +423,39 @@ def generate_test_result(
     request_date: str,
     output_dir: Path,
     taiga_config_path: Optional[Path] = None,
-) -> Path:
+    progress_callback: Optional[callable] = None,
+) -> tuple[Path, List[TaigaLogEntry]]:
     rows = read_release_rows(input_path, sheet_name)
     workbook = create_test_result_workbook(rows, release_type, request_date)
     data_start_row = 8 if release_type.strip().upper() == "PROD" else 2
-    taiga_map, taiga_logs = build_taiga_enrichment(rows, taiga_config_path)
+    taiga_map, taiga_logs, statuses = build_taiga_enrichment(rows, taiga_config_path, progress_callback)
     apply_taiga_enrichment(
         workbook["Summary"],
         rows,
         taiga_map,
         data_start_row=data_start_row,
     )
+
+    if statuses:
+        status_sheet = workbook.create_sheet(title="Statuses")
+        status_sheet.sheet_state = "hidden"
+        for i, status in enumerate(statuses, start=1):
+            status_sheet.cell(row=i, column=1, value=status)
+        
+        dv = DataValidation(
+            type="list", 
+            formula1=f"Statuses!$A$1:$A${len(statuses)}", 
+            allow_blank=True
+        )
+        workbook["Summary"].add_data_validation(dv)
+        last_row = data_start_row + len(rows) - 1
+        dv.add(f"G{data_start_row}:G{last_row}")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / build_output_filename(release_type, request_date)
     workbook.save(output_path)
     write_taiga_log(output_path, taiga_logs)
-    return output_path
+    return output_path, taiga_logs
 
 
 def today_text() -> str:

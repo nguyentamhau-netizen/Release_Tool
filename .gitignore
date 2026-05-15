@@ -13,3 +13,5 @@ build/
 # Local outputs
 output/generated/
 taiga.local.json
+
+user_prefs.json
