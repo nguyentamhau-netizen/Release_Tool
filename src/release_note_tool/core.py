@@ -19,10 +19,12 @@ REQUIRED_SOURCE_HEADERS = (
     "No",
     "Sprint",
     "Service",
-    "Module",
-    "Link",
     "Type",
     "US Name",
+)
+OPTIONAL_SOURCE_HEADERS = (
+    "Module",
+    "Link",
 )
 ID_HEADERS = (
     "US ID",
@@ -118,7 +120,7 @@ def find_header_map(worksheet: Worksheet) -> tuple[int, Dict[str, int]]:
     best_map: Dict[str, int] = {}
     normalized_required = {
         header.casefold(): header
-        for header in (*REQUIRED_SOURCE_HEADERS, *ID_HEADERS)
+        for header in (*REQUIRED_SOURCE_HEADERS, *ID_HEADERS, *OPTIONAL_SOURCE_HEADERS)
     }
 
     for row_index, row in enumerate(
@@ -176,8 +178,8 @@ def read_release_rows(workbook_path: Path, sheet_name: str) -> List[ReleaseRow]:
                 no=row["No"],
                 sprint=row["Sprint"],
                 service=row["Service"],
-                module=row["Module"],
-                link=row["Link"],
+                module=row.get("Module", ""),
+                link=row.get("Link", ""),
                 us_id=item_id,
                 item_type=item_type,
                 us_name=row["US Name"],

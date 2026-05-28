@@ -36,7 +36,7 @@ def run_smoke_test() -> None:
         sheets = find_matching_sheets(input_path)
         assert sheets == ["Sprint 6"]
 
-        output_path = generate_test_result(
+        output_path, _ = generate_test_result(
             input_path=input_path,
             sheet_name="Sprint 6",
             release_type="UAT",
