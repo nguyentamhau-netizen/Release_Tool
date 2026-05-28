@@ -148,10 +148,19 @@ def find_header_map(worksheet: Worksheet) -> tuple[int, Dict[str, int]]:
 
 def read_release_rows(workbook_path: Path, sheet_name: str) -> List[ReleaseRow]:
     workbook = load_workbook(workbook_path, data_only=False)
-    if sheet_name not in workbook.sheetnames:
+    matched_sheet_name = None
+    if sheet_name in workbook.sheetnames:
+        matched_sheet_name = sheet_name
+    else:
+        for name in workbook.sheetnames:
+            if name.strip().casefold() == sheet_name.strip().casefold():
+                matched_sheet_name = name
+                break
+
+    if not matched_sheet_name:
         raise ValueError(f"Sheet '{sheet_name}' not found in workbook.")
 
-    worksheet = workbook[sheet_name]
+    worksheet = workbook[matched_sheet_name]
     header_row, header_map = find_header_map(worksheet)
     rows: List[ReleaseRow] = []
     empty_streak = 0

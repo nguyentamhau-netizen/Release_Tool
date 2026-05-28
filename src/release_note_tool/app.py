@@ -265,7 +265,7 @@ class ReleaseNoteApp:
 
     def _generate(self) -> None:
         input_file = self.input_file_var.get().strip()
-        sheet_name = self.sheet_name_var.get().strip()
+        sheet_name = self.sheet_name_var.get()
         release_type = self.release_type_var.get().strip()
         request_date = self.request_date_var.get().strip()
 
