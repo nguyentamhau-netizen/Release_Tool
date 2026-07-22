@@ -90,7 +90,7 @@ class TaigaClient:
             authorized=True,
         )
         statuses = set()
-        for key in ("userstory_statuses", "issue_statuses"):
+        for key in ("us_statuses", "userstory_statuses", "issue_statuses"):
             for status_obj in payload.get(key, []):
                 name = status_obj.get("name")
                 if name:
